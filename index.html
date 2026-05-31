@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI 情緒垃圾筒 Display</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">AI</div>
+          <div>
+            <p class="eyebrow">EMOTIONAL SMART BIN</p>
+            <h1>AI 情緒垃圾筒</h1>
+          </div>
+        </div>
+        <nav class="view-tabs" aria-label="頁面模式">
+          <button class="tab-button active" type="button" data-view="display">Display</button>
+          <button class="tab-button" type="button" data-view="admin">Admin</button>
+        </nav>
+      </header>
+
+      <main>
+        <section class="view active" id="display-view" aria-label="使用者端公告螢幕">
+          <div class="display-grid">
+            <section class="hero-panel">
+              <div class="scan-lines" aria-hidden="true"></div>
+              <div class="state-pill" id="state-pill">待機中</div>
+              <div class="hero-content">
+                <div class="turtle-stage" aria-label="海龜角色狀態">
+                  <div class="turtle-shell">
+                    <span class="turtle-eye left"></span>
+                    <span class="turtle-eye right"></span>
+                    <span class="turtle-mouth"></span>
+                  </div>
+                  <div class="speech-bubble" id="roast-line">靠近我，讓我看看你丟了什麼。</div>
+                </div>
+                <div class="result-area">
+                  <p class="status-label">目前判定</p>
+                  <h2 id="result-title">等待投入</h2>
+                  <p id="result-copy">全程零按鈕，靠近即偵測，投入後自動判定。</p>
+                  <div class="confidence-meter" aria-label="AI 信心值">
+                    <span>Confidence</span>
+                    <div class="meter-track">
+                      <div class="meter-fill" id="confidence-fill"></div>
+                    </div>
+                    <strong id="confidence-value">--</strong>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <aside class="stats-rail" aria-label="今日統計">
+              <div class="metric-card">
+                <span class="metric-label">正確投入</span>
+                <strong id="accept-count">42</strong>
+                <small>今天累積</small>
+              </div>
+              <div class="metric-card danger">
+                <span class="metric-label">被抓到亂丟</span>
+                <strong id="reject-count">8</strong>
+                <small>需要被教育</small>
+              </div>
+              <div class="metric-card accent">
+                <span class="metric-label">虛擬海龜</span>
+                <strong id="turtle-count">12</strong>
+                <small>累積救活數</small>
+              </div>
+              <div class="snapshot-card">
+                <span class="metric-label">D435 快照</span>
+                <div class="snapshot-frame" id="snapshot-frame">
+                  <div class="object-shape"></div>
+                  <div class="scan-dot"></div>
+                </div>
+              </div>
+            </aside>
+          </div>
+
+          <section class="control-strip" aria-label="Demo 控制">
+            <button class="control-button" type="button" data-event="detect">偵測靠近</button>
+            <button class="control-button accept" type="button" data-event="accept">正確分類</button>
+            <button class="control-button reject" type="button" data-event="reject">錯誤分類</button>
+            <button class="control-button warn" type="button" data-event="multi">一次丟多個</button>
+            <button class="control-button low" type="button" data-event="low">低信心</button>
+          </section>
+
+          <section class="recent-events" aria-label="最近犯案紀錄">
+            <div class="section-heading">
+              <p class="eyebrow">LOCAL JSON LOG</p>
+              <h2>最近事件</h2>
+            </div>
+            <div class="event-list" id="display-events"></div>
+          </section>
+        </section>
+
+        <section class="view" id="admin-view" aria-label="Admin 控制面板">
+          <div class="admin-layout">
+            <section class="system-panel">
+              <div class="section-heading">
+                <p class="eyebrow">SYSTEM HEALTH</p>
+                <h2>系統狀態監控</h2>
+              </div>
+              <div class="health-grid">
+                <div class="health-item online">
+                  <span>D435 Depth</span>
+                  <strong>Connected</strong>
+                </div>
+                <div class="health-item online">
+                  <span>YOLOv8n TensorRT</span>
+                  <strong>Loaded</strong>
+                </div>
+                <div class="health-item online">
+                  <span>Display Queue</span>
+                  <strong>Listening</strong>
+                </div>
+                <div class="health-item standby">
+                  <span>Speaker</span>
+                  <strong>Standby</strong>
+                </div>
+              </div>
+            </section>
+
+            <section class="settings-panel">
+              <div class="section-heading">
+                <p class="eyebrow">LIVE CONTROL</p>
+                <h2>參數即時調整</h2>
+              </div>
+              <label class="range-row">
+                <span>Confidence 閾值</span>
+                <input id="threshold-control" type="range" min="0.3" max="0.9" step="0.05" value="0.5" />
+                <strong id="threshold-value">0.50</strong>
+              </label>
+              <label class="range-row">
+                <span>Roast 音量</span>
+                <input id="volume-control" type="range" min="0" max="100" value="72" />
+                <strong id="volume-value">72%</strong>
+              </label>
+              <fieldset class="segmented-control">
+                <legend>Roast 強度</legend>
+                <label><input type="radio" name="roast-level" value="light" /> 輕度</label>
+                <label><input type="radio" name="roast-level" value="medium" checked /> 中度</label>
+                <label><input type="radio" name="roast-level" value="heavy" /> 重度</label>
+              </fieldset>
+            </section>
+
+            <section class="log-panel">
+              <div class="section-heading">
+                <p class="eyebrow">EVENT LOG</p>
+                <h2>完整事件紀錄</h2>
+              </div>
+              <div class="table-actions">
+                <button class="control-button" type="button" id="export-csv">匯出 CSV</button>
+                <button class="control-button ghost" type="button" id="simulate-stream">模擬 Queue 事件</button>
+              </div>
+              <div class="log-table-wrap">
+                <table class="log-table">
+                  <thead>
+                    <tr>
+                      <th>時間</th>
+                      <th>結果</th>
+                      <th>Confidence</th>
+                      <th>Roast</th>
+                    </tr>
+                  </thead>
+                  <tbody id="admin-log"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
