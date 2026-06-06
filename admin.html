@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI 情緒垃圾筒 Admin</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell admin-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">AI</div>
+          <div>
+            <p class="eyebrow">ADMIN CONTROL</p>
+            <h1>Display Admin</h1>
+          </div>
+        </div>
+        <a class="admin-link" href="/" aria-label="回到 Display">Display</a>
+      </header>
+
+      <main>
+        <section class="view active" id="admin-view" aria-label="Admin 控制面板">
+          <div class="admin-layout">
+            <section class="system-panel">
+              <div class="section-heading">
+                <p class="eyebrow">SYSTEM HEALTH</p>
+                <h2>系統狀態監控</h2>
+              </div>
+              <div class="health-grid">
+                <div class="health-item online">
+                  <span>L515 Depth</span>
+                  <strong>Connected</strong>
+                </div>
+                <div class="health-item online">
+                  <span>YOLOv11n TensorRT</span>
+                  <strong>Loaded</strong>
+                </div>
+                <div class="health-item online">
+                  <span>Display Queue</span>
+                  <strong id="queue-status">Listening</strong>
+                </div>
+                <div class="health-item online">
+                  <span>Browser Bridge</span>
+                  <strong id="bridge-status">Loading</strong>
+                </div>
+                <div class="health-item standby">
+                  <span>Speaker</span>
+                  <strong>Standby</strong>
+                </div>
+              </div>
+            </section>
+
+            <section class="settings-panel">
+              <div class="section-heading">
+                <p class="eyebrow">LIVE CONTROL</p>
+                <h2>參數即時調整</h2>
+              </div>
+              <label class="range-row">
+                <span>Confidence 閾值</span>
+                <input id="threshold-control" type="range" min="0.3" max="0.9" step="0.05" value="0.5" />
+                <strong id="threshold-value">0.50</strong>
+              </label>
+              <label class="range-row">
+                <span>Roast 音量</span>
+                <input id="volume-control" type="range" min="0" max="100" value="72" />
+                <strong id="volume-value">72%</strong>
+              </label>
+              <fieldset class="segmented-control">
+                <legend>Roast 強度</legend>
+                <label><input type="radio" name="roast-level" value="light" /> 輕度</label>
+                <label><input type="radio" name="roast-level" value="medium" checked /> 中度</label>
+                <label><input type="radio" name="roast-level" value="heavy" /> 重度</label>
+              </fieldset>
+            </section>
+
+            <section class="log-panel">
+              <div class="section-heading">
+                <p class="eyebrow">EVENT LOG</p>
+                <h2>完整事件紀錄</h2>
+              </div>
+              <div class="table-actions">
+                <button class="control-button" type="button" id="export-csv">匯出 CSV</button>
+                <button class="control-button ghost" type="button" id="simulate-stream">Mock recognition_result</button>
+              </div>
+              <div class="log-table-wrap">
+                <table class="log-table">
+                  <thead>
+                    <tr>
+                      <th>時間</th>
+                      <th>結果</th>
+                      <th>Confidence</th>
+                      <th>Roast</th>
+                    </tr>
+                  </thead>
+                  <tbody id="admin-log"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
