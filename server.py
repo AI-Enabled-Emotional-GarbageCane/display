@@ -3,8 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import random
+import shutil
 import sys
 import threading
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from http import HTTPStatus
@@ -60,6 +63,58 @@ def _mock_recognition_result(result: str) -> dict[str, Any]:
     if result not in samples:
         raise ValueError(f"unknown simulated result: {result}")
     return {"event": "recognition_result", "ts": ts, **samples[result]}
+
+
+def reject_audio_paths(static_root: Path) -> list[str]:
+    return [path.relative_to(static_root).as_posix() for path in reject_audio_files(static_root)]
+
+
+def reject_audio_files(static_root: Path) -> list[Path]:
+    audio_root = static_root / "assets" / "audio" / "reject"
+    if not audio_root.is_dir():
+        return []
+    return [wav_path for wav_path in sorted(audio_root.glob("*.wav")) if wav_path.is_file()]
+
+
+class HostRejectAudioPlayer:
+    def __init__(self, static_root: Path) -> None:
+        self.static_root = static_root
+        self._lock = threading.Lock()
+        self._process: subprocess.Popen[bytes] | None = None
+
+    def play_random_reject(self) -> dict[str, Any]:
+        candidates = reject_audio_files(self.static_root)
+        if not candidates:
+            return {"played": False, "reason": "no_reject_audio_files"}
+
+        audio_path = random.choice(candidates)
+        command = self._play_command(audio_path)
+        if command is None:
+            return {"played": False, "path": audio_path.relative_to(self.static_root).as_posix(), "reason": "no_host_audio_player"}
+
+        with self._lock:
+            if self._process is not None and self._process.poll() is None:
+                self._process.terminate()
+            self._process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        return {
+            "played": True,
+            "path": audio_path.relative_to(self.static_root).as_posix(),
+            "player": Path(command[0]).name,
+        }
+
+    def _play_command(self, audio_path: Path) -> list[str] | None:
+        players = (
+            ("paplay", [str(audio_path)]),
+            ("aplay", ["-q", str(audio_path)]),
+            ("ffplay", ["-nodisp", "-autoexit", "-loglevel", "error", str(audio_path)]),
+            ("play", ["-q", str(audio_path)]),
+        )
+        for executable, args in players:
+            player_path = shutil.which(executable)
+            if player_path:
+                return [player_path, *args]
+        return None
 
 
 def validate_recognition_result(payload: dict[str, Any]) -> dict[str, Any]:
@@ -306,20 +361,39 @@ def _accuracy_rate(accept_count: int, reject_count: int) -> int | None:
     return round((accept_count / total) * 100)
 
 
-def run_queue_consumer(q_result: Any, store: DisplayStateStore, stop_event: threading.Event) -> None:
+def _play_audio_for_reject(snapshot: dict[str, Any], audio_player: HostRejectAudioPlayer | None) -> dict[str, Any] | None:
+    if audio_player is None:
+        return None
+    if snapshot.get("current", {}).get("result") != "reject":
+        return None
+    return audio_player.play_random_reject()
+
+
+def run_queue_consumer(
+    q_result: Any,
+    store: DisplayStateStore,
+    stop_event: threading.Event,
+    audio_player: HostRejectAudioPlayer | None = None,
+) -> None:
     while not stop_event.is_set():
         try:
             payload = q_result.get(timeout=0.25)
         except Empty:
             continue
         try:
-            store.process_recognition_result(payload, source="queue")
+            snapshot = store.process_recognition_result(payload, source="queue")
+            _play_audio_for_reject(snapshot, audio_player)
         except ValueError as exc:
             print(f"[display] ignored invalid recognition_result: {exc}", file=sys.stderr)
 
 
-def create_handler(static_root: Path, store: DisplayStateStore) -> type[BaseHTTPRequestHandler]:
+def create_handler(
+    static_root: Path,
+    store: DisplayStateStore,
+    audio_player: HostRejectAudioPlayer | None = None,
+) -> type[BaseHTTPRequestHandler]:
     root = static_root.resolve()
+    host_audio_player = audio_player if audio_player is not None else HostRejectAudioPlayer(root)
 
     class DisplayRequestHandler(BaseHTTPRequestHandler):
         server_version = "DisplayBridge/0.1"
@@ -331,6 +405,9 @@ def create_handler(static_root: Path, store: DisplayStateStore) -> type[BaseHTTP
                 return
             if parsed.path == "/api/state":
                 self._send_json(store.snapshot())
+                return
+            if parsed.path == "/api/reject-audio":
+                self._send_json({"reject_audio": reject_audio_paths(root)})
                 return
             self._send_static(parsed.path)
 
@@ -344,6 +421,9 @@ def create_handler(static_root: Path, store: DisplayStateStore) -> type[BaseHTTP
                 body = self._read_json_body()
                 payload = body if body.get("event") == "recognition_result" else _mock_recognition_result(str(body.get("result", "")))
                 snapshot = store.process_recognition_result(payload, source="simulate")
+                audio_status = _play_audio_for_reject(snapshot, host_audio_player)
+                if audio_status is not None:
+                    snapshot = {**snapshot, "audio": audio_status}
             except (json.JSONDecodeError, OSError, ValueError) as exc:
                 self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
                 return
@@ -444,13 +524,14 @@ def run_display_server(
     store: DisplayStateStore | None = None,
 ) -> None:
     state_store = store or DisplayStateStore()
+    audio_player = HostRejectAudioPlayer(static_root.resolve())
     stop_event = threading.Event()
     consumer_thread: threading.Thread | None = None
     if q_result is not None:
-        consumer_thread = threading.Thread(target=run_queue_consumer, args=(q_result, state_store, stop_event), daemon=True)
+        consumer_thread = threading.Thread(target=run_queue_consumer, args=(q_result, state_store, stop_event, audio_player), daemon=True)
         consumer_thread.start()
 
-    handler = create_handler(static_root, state_store)
+    handler = create_handler(static_root, state_store, audio_player)
     server = ThreadingHTTPServer((host, port), handler)
     try:
         server.serve_forever()

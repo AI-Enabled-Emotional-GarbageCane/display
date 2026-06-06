@@ -9,7 +9,7 @@
 - 海洋回饋視覺：依狀態切換生成海龜圖，`assets/sea-turtle-accept.png` 用於 accept，`assets/sea-turtle-reject.png` 用於 reject / multi / low，`assets/sea-turtle-display.png` 用於待機。
 - Admin 控制面板：獨立於 `/admin`，顯示系統健康狀態、demo 模擬、CSV 匯出。
 - 消費 vision 的 `recognition_result`，並更新狀態機與本機事件紀錄。
-- 播放或交接 roast / accept 語音素材；沒有音檔時 UI 不失敗。
+- reject 時由本機 Python bridge 在主機端隨機播放 `assets/audio/reject/*.wav`；聲音走主機預設音訊輸出，例如 HDMI 螢幕喇叭。accept / low / multi / detect 不播放音檔。
 
 Display 不負責模型推論、L515 depth 距離觸發、使用者確認按鈕或公開的 firmware 指令回傳流程。
 
@@ -27,6 +27,7 @@ firmware -- q_detected / user_detected --> vision -- q_result / recognition_resu
 - `GET /admin`：Admin 控制面板。
 - `GET /events`：SSE stream，推送目前狀態與事件紀錄。
 - `GET /api/state`：目前狀態 snapshot。
+- `GET /api/reject-audio`：列出本機可用 reject WAV，方便檢查 demo 素材。
 - `POST /api/simulate`：demo-only，產生 mock `recognition_result`。
 
 這不是外部雲端 API，也不改三模組的 public contract。Web Bridge 的目的只是讓 Jetson、筆電投影、同 LAN 手機或另一台電腦能用瀏覽器觀看 Display。Admin 不放在公開 Display 畫面的 tab 裡，避免 demo 現場誤用控制項。
@@ -78,6 +79,7 @@ run_display_server(q_result, host="0.0.0.0", port=8080)
 - `class == "reject"` 且信心足夠：顯示 reject，增加 reject 統計。
 - result 狀態會進入 cooldown，再回到 idle。
 - UI 邊框光效：accept 為綠光、reject / multi 為紅光、low confidence 為黃光。
+- Host audio：只有真正的 `reject` outcome 會播放隨機 reject WAV；`multi` 雖然計入 reject 統計，但不播放音檔。
 - 原本的角色式視覺已移除；公開 Display 以相機畫面與判定光效為第一視覺。
 
 ## Demo Mock

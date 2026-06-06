@@ -15,10 +15,20 @@ sys.path.insert(0, str(ROOT))
 from server import DisplayStateStore, create_handler
 
 
+class FakeHostAudioPlayer:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def play_random_reject(self) -> dict:
+        self.calls.append("reject")
+        return {"played": True, "path": "assets/audio/reject/reject-01.wav", "player": "fake"}
+
+
 class DisplayBridgeHTTPTests(unittest.TestCase):
     def setUp(self) -> None:
         self.store = DisplayStateStore(cooldown_sec=60)
-        handler = create_handler(ROOT, self.store)
+        self.audio_player = FakeHostAudioPlayer()
+        handler = create_handler(ROOT, self.store, self.audio_player)
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -40,6 +50,17 @@ class DisplayBridgeHTTPTests(unittest.TestCase):
         state = self.get_json("/api/state")
         self.assertEqual(state["current"]["result"], "accept")
         self.assertEqual(state["events"][0]["source"], "simulate")
+        self.assertEqual(self.audio_player.calls, [])
+
+    def test_simulate_reject_plays_host_audio(self) -> None:
+        snapshot = self.post_json("/api/simulate", {"result": "reject"})
+
+        self.assertEqual(snapshot["current"]["result"], "reject")
+        self.assertEqual(snapshot["counts"]["accept"], 0)
+        self.assertEqual(snapshot["counts"]["reject"], 1)
+        self.assertEqual(self.audio_player.calls, ["reject"])
+        self.assertEqual(snapshot["audio"]["played"], True)
+        self.assertEqual(snapshot["audio"]["player"], "fake")
 
     def test_low_confidence_does_not_increment_accept_or_reject_counts(self) -> None:
         snapshot = self.post_json("/api/simulate", {"result": "low"})
@@ -48,6 +69,7 @@ class DisplayBridgeHTTPTests(unittest.TestCase):
         self.assertEqual(snapshot["counts"]["accept"], 0)
         self.assertEqual(snapshot["counts"]["reject"], 0)
         self.assertEqual(snapshot["events"][0]["result"], "low")
+        self.assertEqual(self.audio_player.calls, [])
 
     def test_full_payload_with_multiple_objects_is_reject_counted_multi(self) -> None:
         snapshot = self.post_json(
@@ -65,6 +87,7 @@ class DisplayBridgeHTTPTests(unittest.TestCase):
         self.assertEqual(snapshot["current"]["result"], "multi")
         self.assertEqual(snapshot["counts"]["accept"], 0)
         self.assertEqual(snapshot["counts"]["reject"], 1)
+        self.assertEqual(self.audio_player.calls, [])
 
     def test_admin_route_serves_separate_admin_page(self) -> None:
         with urllib.request.urlopen(f"{self.base_url}/admin", timeout=2) as response:
@@ -73,6 +96,16 @@ class DisplayBridgeHTTPTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertIn("Display Admin", html)
         self.assertIn('href="/"', html)
+
+    def test_reject_audio_manifest_lists_only_reject_wavs(self) -> None:
+        manifest = self.get_json("/api/reject-audio")
+        audio_paths = manifest["reject_audio"]
+
+        self.assertEqual(len(audio_paths), 30)
+        self.assertEqual(audio_paths[0], "assets/audio/reject/reject-01.wav")
+        self.assertEqual(audio_paths[-1], "assets/audio/reject/reject-30.wav")
+        self.assertTrue(all(path.startswith("assets/audio/reject/reject-") for path in audio_paths))
+        self.assertTrue(all(path.endswith(".wav") for path in audio_paths))
 
     def get_json(self, path: str) -> dict:
         with urllib.request.urlopen(f"{self.base_url}{path}", timeout=2) as response:
@@ -128,6 +161,8 @@ class DisplayStaleTextTests(unittest.TestCase):
         self.assertIn('id="impact-image"', html)
         self.assertIn("assets/sea-turtle-accept.png", script)
         self.assertIn("assets/sea-turtle-reject.png", script)
+        self.assertNotIn("new Audio", script)
+        self.assertNotIn("playRejectRoastAudio", script)
         self.assertIn("navigator.mediaDevices.getUserMedia", script)
         self.assertIn("body.state-accept .camera-frame", styles)
         self.assertIn("body.state-reject .camera-frame", styles)
