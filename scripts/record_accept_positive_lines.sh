@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LINES_FILE="$ROOT_DIR/assets/audio/reject/roast_lines.tsv"
-OUT_DIR="$ROOT_DIR/assets/audio/reject"
+LINES_FILE="$ROOT_DIR/assets/audio/accept/positive_lines.tsv"
+OUT_DIR="$ROOT_DIR/assets/audio/accept"
 RATE=44100
 CHANNELS=1
 PLAYBACK_DEVICE="${DISPLAY_AUDIO_DEVICE:-alsa_output.platform-3510000.hda.hdmi-stereo}"
@@ -12,7 +12,7 @@ usage() {
   printf 'Usage: %s [--from N] [--seconds N] [--list] [--lines PATH] [--out-dir PATH] [--playback-device DEVICE]\n' "$(basename "$0")"
   printf '\n'
   printf 'Options:\n'
-  printf '  --from N        Start from sentence N, 1-30. Default: 1\n'
+  printf '  --from N        Start from sentence N, 1-20. Default: 1\n'
   printf '  --seconds N     Record each line for exactly N seconds. Default: manual stop\n'
   printf '  --list          Show the recording queue and exit\n'
   printf '  --lines PATH    Use a different TSV file with filename<TAB>text\n'
@@ -57,8 +57,10 @@ play_wav() {
     ffplay -nodisp -autoexit -loglevel error "$wav_path"
   elif command -v play >/dev/null 2>&1; then
     play -q "$wav_path"
+  elif command -v paplay >/dev/null 2>&1; then
+    paplay "$wav_path"
   else
-    printf '找不到播放工具，請安裝 aplay、ffplay 或 sox/play。\n' >&2
+    printf '找不到播放工具，請安裝 aplay、ffplay、sox/play 或 paplay。\n' >&2
     return 1
   fi
 }
@@ -86,6 +88,23 @@ record_wav() {
 
   ffmpeg -y -hide_banner -loglevel error -i "$tmp_path" -ar "$RATE" -ac "$CHANNELS" -sample_fmt s16 "$target"
   rm -f "$tmp_path"
+}
+
+validate_voice_line() {
+  local line_number="$1"
+  local filename="$2"
+  local text="$3"
+
+  if [[ -z "$filename" || -z "$text" ]]; then
+    printf '台詞清單第 %s 行格式錯誤，必須是 filename<TAB>text。\n' "$line_number" >&2
+    exit 1
+  fi
+
+  if [[ "$filename" == */* || "$filename" == *\\* || "$filename" == *..* || "$filename" != *.wav ]]; then
+    printf '台詞清單第 %s 行檔名不合法：%s\n' "$line_number" "$filename" >&2
+    printf '檔名必須像 accept-01.wav，不能是純數字、路徑或非 WAV 檔。\n' >&2
+    exit 1
+  fi
 }
 
 START_AT=1
@@ -145,12 +164,13 @@ if [[ ! -f "$LINES_FILE" ]]; then
   exit 1
 fi
 
-need_cmd arecord
-need_cmd ffmpeg
-mkdir -p "$OUT_DIR"
-
 mapfile -t VOICE_LINES < <(tail -n +2 "$LINES_FILE")
 TOTAL="${#VOICE_LINES[@]}"
+
+for i in "${!VOICE_LINES[@]}"; do
+  IFS=$'\t' read -r filename text <<< "${VOICE_LINES[$i]}"
+  validate_voice_line "$((i + 2))" "$filename" "$text"
+done
 
 if [[ "$LIST_ONLY" -eq 1 ]]; then
   for i in "${!VOICE_LINES[@]}"; do
@@ -160,7 +180,17 @@ if [[ "$LIST_ONLY" -eq 1 ]]; then
   exit 0
 fi
 
-printf 'Roast WAV recorder\n'
+if [[ "$START_AT" -gt "$TOTAL" ]]; then
+  printf '%s\n' "--from must be between 1 and $TOTAL for this line list." >&2
+  exit 1
+fi
+
+need_cmd arecord
+need_cmd ffmpeg
+mkdir -p "$OUT_DIR"
+
+printf 'Accept positive WAV recorder\n'
+printf '台詞清單：%s\n' "$LINES_FILE"
 printf '輸出資料夾：%s\n' "$OUT_DIR"
 printf '格式：%s Hz, mono, 16-bit PCM WAV\n' "$RATE"
 if [[ -n "$PLAYBACK_DEVICE" ]]; then
@@ -172,6 +202,15 @@ else
   printf '錄音長度：手動按 Enter 停止\n'
 fi
 printf '操作：每句錄完會自動播放；Enter 接受，r 重錄，p 再播放，q 離開。\n\n'
+printf '錄音台詞預覽：\n'
+for preview_i in "${!VOICE_LINES[@]}"; do
+  if [[ "$preview_i" -ge 3 ]]; then
+    break
+  fi
+  IFS=$'\t' read -r preview_filename preview_text <<< "${VOICE_LINES[$preview_i]}"
+  printf '  %02d. %s\t%s\n' "$((preview_i + 1))" "$preview_filename" "$preview_text"
+done
+printf '\n'
 
 for i in "${!VOICE_LINES[@]}"; do
   index="$((i + 1))"
@@ -225,4 +264,4 @@ for i in "${!VOICE_LINES[@]}"; do
   done
 done
 
-printf '\n完成：%d 個 WAV 都已錄製。\n' "$TOTAL"
+printf '\n完成：%d 個正向 WAV 都已錄製。\n' "$TOTAL"

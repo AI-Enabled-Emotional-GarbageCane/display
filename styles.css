@@ -183,17 +183,6 @@ h1 {
   padding: 44px;
 }
 
-.speech-bubble {
-  min-height: 0;
-  margin: 0;
-  padding: 10px 0 0;
-  border-top: 1px solid rgba(246, 200, 95, 0.4);
-  color: #fff6d8;
-  font-size: clamp(16px, 1.55vw, 22px);
-  font-weight: 900;
-  line-height: 1.25;
-}
-
 .result-area {
   position: relative;
   z-index: 3;
@@ -202,7 +191,6 @@ h1 {
   grid-template-columns: minmax(220px, 0.35fr) minmax(0, 1fr);
   grid-template-areas:
     "label copy"
-    "title speech"
     "title confidence";
   gap: 9px 40px;
   align-items: end;
@@ -237,11 +225,6 @@ h1 {
   font-size: clamp(14px, 1.18vw, 17px);
   line-height: 1.45;
   overflow-wrap: break-word;
-}
-
-.result-area .speech-bubble {
-  grid-area: speech;
-  min-width: 0;
 }
 
 .result-area .confidence-meter {
@@ -283,12 +266,28 @@ h1 {
   transition: box-shadow 240ms ease;
 }
 
-.camera-frame video {
+.camera-frame video,
+.camera-snapshot {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
   background: #071314;
+}
+
+.camera-snapshot {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+
+.camera-frame.camera-live .camera-snapshot {
+  opacity: 1;
+}
+
+.camera-frame.camera-live video {
+  display: none;
 }
 
 .camera-placeholder {
@@ -725,8 +724,7 @@ body.state-cooldown .camera-frame {
     grid-template-columns: minmax(180px, 0.55fr) minmax(300px, 1fr);
     grid-template-areas:
       "label copy"
-      "title speech"
-      "confidence confidence";
+      "title confidence";
     gap: 10px 24px;
     align-items: start;
   }
@@ -743,7 +741,6 @@ body.state-cooldown .camera-frame {
       "label"
       "title"
       "copy"
-      "speech"
       "confidence";
     gap: 10px;
     padding: 10px 0 0;
@@ -794,11 +791,6 @@ body.state-cooldown .camera-frame {
 
   .result-area h2 {
     font-size: clamp(32px, 13vw, 48px);
-  }
-
-  .speech-bubble {
-    min-height: 0;
-    font-size: 17px;
   }
 
   .confidence-meter,

@@ -71,7 +71,6 @@ const tabButtons = document.querySelectorAll(".tab-button");
 const statePill = document.querySelector("#state-pill");
 const resultTitle = document.querySelector("#result-title");
 const resultCopy = document.querySelector("#result-copy");
-const roastLine = document.querySelector("#roast-line");
 const confidenceFill = document.querySelector("#confidence-fill");
 const confidenceValue = document.querySelector("#confidence-value");
 const acceptCountEl = document.querySelector("#accept-count");
@@ -87,12 +86,15 @@ const queueStatus = document.querySelector("#queue-status");
 const bridgeStatus = document.querySelector("#bridge-status");
 const cameraFrame = document.querySelector("#camera-frame");
 const cameraVideo = document.querySelector("#camera-video");
+const cameraSnapshot = document.querySelector("#camera-snapshot");
 const cameraToggle = document.querySelector("#camera-toggle");
 const cameraMessage = document.querySelector("#camera-message");
 const impactImage = document.querySelector("#impact-image");
 const impactCopy = document.querySelector("#impact-copy");
 
 let cameraStream = null;
+let cameraStreamStarted = false;
+let cameraRetryTimer = null;
 
 const impactVisuals = {
   idle: {
@@ -103,7 +105,7 @@ const impactVisuals = {
   detect: {
     src: "assets/sea-turtle-display.png",
     alt: "海龜在海中游動",
-    copy: "正在觀察投入物，準備給出回饋。",
+    copy: "正在即時觀察投入物，等待模型結果穩定。",
   },
   cooldown: {
     src: "assets/sea-turtle-display.png",
@@ -240,6 +242,23 @@ function setCameraMessage(message) {
 }
 
 async function startCamera() {
+  showCameraStream();
+}
+
+function cameraStreamUrl() {
+  return `/api/camera.mjpg?v=${Date.now()}`;
+}
+
+function showCameraStream() {
+  if (!cameraFrame || !cameraSnapshot || cameraStreamStarted || window.location.protocol === "file:") return;
+  window.clearTimeout(cameraRetryTimer);
+  cameraStreamStarted = true;
+  cameraSnapshot.src = cameraStreamUrl();
+  cameraFrame.classList.add("camera-live");
+  setCameraMessage("L515 RGB 即時串流中");
+}
+
+async function startBrowserCamera() {
   if (!cameraFrame || !cameraVideo) return;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     setCameraMessage("此瀏覽器不支援相機存取");
@@ -281,7 +300,6 @@ function setDisplayState(displayState) {
   if (statePill) statePill.textContent = state.pill;
   if (resultTitle) resultTitle.textContent = state.title;
   if (resultCopy) resultCopy.textContent = state.copy;
-  if (roastLine) roastLine.textContent = state.roast;
   if (impactImage) {
     impactImage.src = impact.src;
     impactImage.alt = impact.alt;
@@ -329,7 +347,7 @@ function renderEvents() {
           <article class="event-card ${escapeHtml(event.result)}">
             <span class="metric-label">${escapeHtml(event.time)}</span>
             <strong>${escapeHtml(resultLabel(event.result))}</strong>
-            <p>conf ${escapeHtml(formatConfidence(event.confidence))} · ${escapeHtml(event.roast)}</p>
+            <p>conf ${escapeHtml(formatConfidence(event.confidence))} · ${escapeHtml(event.num_objects || 1)} 件物件</p>
           </article>
         `,
       )
@@ -405,7 +423,9 @@ function applySnapshot(snapshot) {
   setDisplayState(snapshot.current);
   renderCounts();
   renderEvents();
-  if (snapshot.current.source === "queue") {
+  if (snapshot.current.event === "vision_preview") {
+    setQueueStatus("Preview", true);
+  } else if (snapshot.current.source === "queue") {
     setQueueStatus("Receiving", true);
   }
 }
@@ -535,8 +555,19 @@ if (cameraToggle) {
   cameraToggle.addEventListener("click", startCamera);
 }
 
+if (cameraSnapshot) {
+  cameraSnapshot.addEventListener("error", () => {
+    cameraStreamStarted = false;
+    cameraFrame?.classList.remove("camera-live");
+    setCameraMessage("等待 /api/camera.mjpg 即時影像");
+    window.clearTimeout(cameraRetryTimer);
+    cameraRetryTimer = window.setTimeout(startCamera, 2000);
+  });
+}
+
 renderCounts();
 renderEvents();
 setDisplayState(stateMap.idle);
+startCamera();
 loadInitialState();
 startEventStream();

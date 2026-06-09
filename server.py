@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import mimetypes
+import os
 import random
 import shutil
 import sys
@@ -15,13 +17,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from queue import Empty
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 
 ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = ROOT
+DEFAULT_AUDIO_DEVICE_ENV = "DISPLAY_AUDIO_DEVICE"
+DEFAULT_AGX_AUDIO_DEVICE = "alsa_output.platform-3510000.hda.hdmi-stereo"
 REQUIRED_RECOGNITION_FIELDS = {"event", "class", "confidence", "num_objects", "snapshot_path", "ts"}
 CLASS_VALUES = {"accept", "reject"}
+SNAPSHOT_SUFFIXES = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+MJPEG_BOUNDARY = b"frame"
 
 
 def _now_iso() -> str:
@@ -76,9 +82,65 @@ def reject_audio_files(static_root: Path) -> list[Path]:
     return [wav_path for wav_path in sorted(audio_root.glob("*.wav")) if wav_path.is_file()]
 
 
+def _snapshot_roots(static_root: Path) -> tuple[Path, ...]:
+    workspace_root = static_root.parent
+    return (
+        static_root.resolve(),
+        (workspace_root / "vision" / "snapshots").resolve(),
+    )
+
+
+def resolve_snapshot_path(static_root: Path, raw_path: str) -> Path:
+    if not raw_path:
+        raise ValueError("snapshot path is required")
+
+    path = Path(raw_path)
+    candidate = path.resolve() if path.is_absolute() else (static_root / path).resolve()
+    if candidate.suffix.lower() not in SNAPSHOT_SUFFIXES:
+        raise ValueError("snapshot must be an image file")
+    if not candidate.is_file():
+        raise FileNotFoundError(f"snapshot not found: {raw_path}")
+    if not any(_is_within_root(candidate, allowed_root) for allowed_root in _snapshot_roots(static_root)):
+        raise ValueError("snapshot path is outside allowed roots")
+    return candidate
+
+
+class CameraFrameStore:
+    def __init__(self) -> None:
+        self._condition = threading.Condition()
+        self._jpeg: bytes | None = None
+        self._version = 0
+
+    def update_jpeg(self, jpeg_bytes: bytes) -> None:
+        if not jpeg_bytes:
+            return
+        with self._condition:
+            self._jpeg = bytes(jpeg_bytes)
+            self._version += 1
+            self._condition.notify_all()
+
+    def update_rgb(self, image_rgb: Any, *, quality: int = 82) -> None:
+        from PIL import Image
+
+        buffer = io.BytesIO()
+        Image.fromarray(image_rgb.astype("uint8", copy=False), mode="RGB").save(buffer, format="JPEG", quality=quality)
+        self.update_jpeg(buffer.getvalue())
+
+    def wait_for_frame(self, last_version: int | None = None, *, timeout_sec: float = 10.0) -> tuple[int, bytes] | None:
+        with self._condition:
+            changed = self._condition.wait_for(
+                lambda: self._jpeg is not None and (last_version is None or self._version != last_version),
+                timeout=timeout_sec,
+            )
+            if not changed or self._jpeg is None:
+                return None
+            return self._version, self._jpeg
+
+
 class HostRejectAudioPlayer:
-    def __init__(self, static_root: Path) -> None:
+    def __init__(self, static_root: Path, *, audio_device: str | None = None) -> None:
         self.static_root = static_root
+        self.audio_device = _resolve_audio_device(audio_device)
         self._lock = threading.Lock()
         self._process: subprocess.Popen[bytes] | None = None
 
@@ -90,7 +152,13 @@ class HostRejectAudioPlayer:
         audio_path = random.choice(candidates)
         command = self._play_command(audio_path)
         if command is None:
-            return {"played": False, "path": audio_path.relative_to(self.static_root).as_posix(), "reason": "no_host_audio_player"}
+            reason = "no_configured_audio_player" if self.audio_device else "no_host_audio_player"
+            return {
+                "played": False,
+                "path": audio_path.relative_to(self.static_root).as_posix(),
+                "reason": reason,
+                "audio_device": self.audio_device,
+            }
 
         with self._lock:
             if self._process is not None and self._process.poll() is None:
@@ -101,9 +169,27 @@ class HostRejectAudioPlayer:
             "played": True,
             "path": audio_path.relative_to(self.static_root).as_posix(),
             "player": Path(command[0]).name,
+            "audio_device": self.audio_device,
         }
 
     def _play_command(self, audio_path: Path) -> list[str] | None:
+        if self.audio_device:
+            if _looks_like_pulse_sink(self.audio_device):
+                players = (
+                    ("paplay", ["--device", self.audio_device, str(audio_path)]),
+                    ("aplay", ["-q", "-D", self.audio_device, str(audio_path)]),
+                )
+            else:
+                players = (
+                    ("aplay", ["-q", "-D", self.audio_device, str(audio_path)]),
+                    ("paplay", ["--device", self.audio_device, str(audio_path)]),
+                )
+            for executable, args in players:
+                player_path = shutil.which(executable)
+                if player_path:
+                    return [player_path, *args]
+            return None
+
         players = (
             ("paplay", [str(audio_path)]),
             ("aplay", ["-q", str(audio_path)]),
@@ -115,6 +201,18 @@ class HostRejectAudioPlayer:
             if player_path:
                 return [player_path, *args]
         return None
+
+
+def _resolve_audio_device(audio_device: str | None) -> str | None:
+    if audio_device is not None:
+        return audio_device.strip() or None
+    if DEFAULT_AUDIO_DEVICE_ENV in os.environ:
+        return os.environ[DEFAULT_AUDIO_DEVICE_ENV].strip() or None
+    return DEFAULT_AGX_AUDIO_DEVICE
+
+
+def _looks_like_pulse_sink(audio_device: str) -> bool:
+    return audio_device.startswith(("alsa_output.", "bluez_output.", "auto_null"))
 
 
 def validate_recognition_result(payload: dict[str, Any]) -> dict[str, Any]:
@@ -148,6 +246,38 @@ def validate_recognition_result(payload: dict[str, Any]) -> dict[str, Any]:
         "confidence": confidence,
         "num_objects": num_objects,
         "snapshot_path": snapshot_path,
+        "ts": ts,
+    }
+
+
+def validate_vision_preview(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("event") != "vision_preview":
+        raise ValueError("event must be vision_preview")
+
+    raw_class = payload.get("class")
+    predicted_class = None if raw_class in {None, ""} else str(raw_class)
+    if predicted_class is not None and predicted_class not in CLASS_VALUES:
+        raise ValueError("preview class must be accept, reject, or empty")
+
+    raw_confidence = payload.get("confidence")
+    confidence = None if raw_confidence in {None, ""} else float(raw_confidence)
+    if confidence is not None and not 0 <= confidence <= 1:
+        raise ValueError("preview confidence must be between 0 and 1")
+
+    raw_distance = payload.get("distance_cm")
+    distance_cm = None if raw_distance in {None, ""} else float(raw_distance)
+    stable_count = max(0, int(payload.get("stable_count") or 0))
+    stable_required = max(1, int(payload.get("stable_required") or 1))
+    ts = str(payload.get("ts") or _now_iso())
+
+    return {
+        "event": "vision_preview",
+        "object_present": bool(payload.get("object_present")),
+        "class": predicted_class,
+        "confidence": confidence,
+        "distance_cm": distance_cm,
+        "stable_count": stable_count,
+        "stable_required": stable_required,
         "ts": ts,
     }
 
@@ -256,6 +386,15 @@ class DisplayStateStore:
         self._schedule_cooldown(generation)
         return self.snapshot()
 
+    def process_vision_preview(self, payload: dict[str, Any], *, source: str = "queue") -> dict[str, Any]:
+        preview = validate_vision_preview(payload)
+        with self._condition:
+            self._generation += 1
+            self._cancel_timer_locked()
+            self._current = self._preview_current_payload(preview, source=source)
+            self._publish_locked()
+        return self.snapshot()
+
     def wait_for_update(self, last_version: int, timeout_sec: float = 15.0) -> dict[str, Any] | None:
         with self._condition:
             changed = self._condition.wait_for(lambda: self._version != last_version, timeout=timeout_sec)
@@ -269,6 +408,49 @@ class DisplayStateStore:
         if payload["num_objects"] > 1:
             return OUTCOMES["multi"]
         return OUTCOMES["accept" if payload["class"] == "accept" else "reject"]
+
+    def _preview_current_payload(self, preview: dict[str, Any], *, source: str) -> dict[str, Any]:
+        if not preview["object_present"]:
+            payload = self._current_payload("idle", source=source)
+            payload.update({"event": "vision_preview", "object_present": False})
+            return payload
+
+        label = preview.get("class")
+        confidence = preview.get("confidence")
+        stable_count = int(preview.get("stable_count") or 0)
+        stable_required = int(preview.get("stable_required") or 1)
+        if confidence is None:
+            result = "detect"
+            title = "即時監看中"
+            copy = "L515 已看到物體，等待模型輸出。"
+        elif confidence < self.confidence_threshold:
+            result = "low"
+            title = "低信心"
+            copy = "模型信心不足，請讓物體更清楚。"
+        else:
+            result = "detect"
+            title = "即時辨識中"
+            label_text = "Accept" if label == "accept" else "Reject"
+            copy = f"目前傾向 {label_text}，穩定 {stable_count}/{stable_required} 後才會記錄與播放。"
+
+        return {
+            "event": "vision_preview",
+            "result": result,
+            "pill": "Realtime",
+            "title": title,
+            "copy": copy,
+            "roast": "",
+            "confidence": confidence,
+            "class": label,
+            "num_objects": 1,
+            "snapshot_path": None,
+            "distance_cm": preview.get("distance_cm"),
+            "object_present": True,
+            "stable_count": stable_count,
+            "stable_required": stable_required,
+            "ts": preview["ts"],
+            "source": source,
+        }
 
     def _current_payload(
         self,
@@ -381,19 +563,25 @@ def run_queue_consumer(
         except Empty:
             continue
         try:
-            snapshot = store.process_recognition_result(payload, source="queue")
-            _play_audio_for_reject(snapshot, audio_player)
+            if payload.get("event") == "vision_preview":
+                store.process_vision_preview(payload, source="queue")
+            else:
+                snapshot = store.process_recognition_result(payload, source="queue")
+                _play_audio_for_reject(snapshot, audio_player)
         except ValueError as exc:
-            print(f"[display] ignored invalid recognition_result: {exc}", file=sys.stderr)
+            print(f"[display] ignored invalid vision payload: {exc}", file=sys.stderr)
 
 
 def create_handler(
     static_root: Path,
     store: DisplayStateStore,
     audio_player: HostRejectAudioPlayer | None = None,
+    *,
+    audio_enabled: bool = True,
+    camera_frames: CameraFrameStore | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     root = static_root.resolve()
-    host_audio_player = audio_player if audio_player is not None else HostRejectAudioPlayer(root)
+    host_audio_player = None if not audio_enabled else audio_player if audio_player is not None else HostRejectAudioPlayer(root)
 
     class DisplayRequestHandler(BaseHTTPRequestHandler):
         server_version = "DisplayBridge/0.1"
@@ -408,6 +596,12 @@ def create_handler(
                 return
             if parsed.path == "/api/reject-audio":
                 self._send_json({"reject_audio": reject_audio_paths(root)})
+                return
+            if parsed.path == "/api/snapshot":
+                self._send_snapshot(parsed.query)
+                return
+            if parsed.path == "/api/camera.mjpg":
+                self._send_camera_stream()
                 return
             self._send_static(parsed.path)
 
@@ -468,6 +662,57 @@ def create_handler(
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
 
+            self._send_file(candidate)
+
+        def _send_snapshot(self, query: str) -> None:
+            try:
+                params = parse_qs(query)
+                raw_path = params.get("path", [""])[0]
+                candidate = resolve_snapshot_path(root, raw_path)
+            except FileNotFoundError:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            except ValueError as exc:
+                self.send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+
+            self._send_file(candidate)
+
+        def _send_camera_stream(self) -> None:
+            if camera_frames is None:
+                self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, "camera stream is not attached")
+                return
+
+            first_frame = camera_frames.wait_for_frame(timeout_sec=15.0)
+            if first_frame is None:
+                self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, "camera frame is not ready")
+                return
+
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", f"multipart/x-mixed-replace; boundary={MJPEG_BOUNDARY.decode('ascii')}")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+
+            version, jpeg = first_frame
+            if not self._write_mjpeg_frame(jpeg):
+                return
+            while True:
+                frame = camera_frames.wait_for_frame(version, timeout_sec=10.0)
+                if frame is None:
+                    continue
+                version, jpeg = frame
+                if not self._write_mjpeg_frame(jpeg):
+                    return
+
+        def _write_mjpeg_frame(self, jpeg: bytes) -> bool:
+            header = (
+                b"--" + MJPEG_BOUNDARY + b"\r\n"
+                b"Content-Type: image/jpeg\r\n"
+                + f"Content-Length: {len(jpeg)}\r\n\r\n".encode("ascii")
+            )
+            return self._write_raw(header + jpeg + b"\r\n")
+
+        def _send_file(self, candidate: Path) -> None:
             content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
             payload = candidate.read_bytes()
             self.send_response(HTTPStatus.OK)
@@ -522,16 +767,23 @@ def run_display_server(
     port: int = 8080,
     static_root: Path = STATIC_ROOT,
     store: DisplayStateStore | None = None,
+    camera_frames: CameraFrameStore | None = None,
+    audio_device: str | None = None,
+    audio_enabled: bool = True,
 ) -> None:
     state_store = store or DisplayStateStore()
-    audio_player = HostRejectAudioPlayer(static_root.resolve())
+    audio_player = (
+        HostRejectAudioPlayer(static_root.resolve(), audio_device=audio_device)
+        if audio_enabled
+        else None
+    )
     stop_event = threading.Event()
     consumer_thread: threading.Thread | None = None
     if q_result is not None:
         consumer_thread = threading.Thread(target=run_queue_consumer, args=(q_result, state_store, stop_event, audio_player), daemon=True)
         consumer_thread.start()
 
-    handler = create_handler(static_root, state_store, audio_player)
+    handler = create_handler(static_root, state_store, audio_player, audio_enabled=audio_enabled, camera_frames=camera_frames)
     server = ThreadingHTTPServer((host, port), handler)
     try:
         server.serve_forever()
@@ -546,9 +798,24 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Serve AI 情緒垃圾筒 Display UI and local SSE bridge.")
     parser.add_argument("--host", default="0.0.0.0", help="Bind host. Use 0.0.0.0 for same-LAN browsers.")
     parser.add_argument("--port", default=8080, type=int, help="HTTP port.")
+    parser.add_argument(
+        "--audio-device",
+        default=None,
+        help=(
+            "Audio output device for AGX-connected speakers. "
+            "Examples: alsa_output.platform-3510000.hda.hdmi-stereo, plughw:0,3, or hw:0,3. "
+            f"Can also be set with {DEFAULT_AUDIO_DEVICE_ENV}. "
+            f"Default: {DEFAULT_AGX_AUDIO_DEVICE}."
+        ),
+    )
+    parser.add_argument("--no-audio", action="store_true", help="Disable display-side host audio playback.")
     args = parser.parse_args()
     print(f"Display bridge listening on http://{args.host}:{args.port}")
-    run_display_server(host=args.host, port=args.port)
+    if args.no_audio:
+        print("Display audio disabled")
+    else:
+        print(f"Display audio device: {_resolve_audio_device(args.audio_device) or 'system default'}")
+    run_display_server(host=args.host, port=args.port, audio_device=args.audio_device, audio_enabled=not args.no_audio)
 
 
 if __name__ == "__main__":

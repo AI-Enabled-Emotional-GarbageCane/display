@@ -27,11 +27,12 @@
               <div class="hero-content">
                 <section class="camera-panel" aria-label="即時相機畫面">
                   <div class="camera-frame" id="camera-frame">
+                    <img id="camera-snapshot" class="camera-snapshot" alt="L515 RGB 即時畫面" />
                     <video id="camera-video" autoplay playsinline muted></video>
                     <div class="camera-placeholder" id="camera-placeholder">
-                      <span class="camera-label">LIVE CAMERA</span>
-                      <button class="camera-button" type="button" id="camera-toggle">啟用相機</button>
-                      <small id="camera-message">瀏覽器會要求相機權限</small>
+                      <span class="camera-label">L515 CAMERA</span>
+                      <button class="camera-button" type="button" id="camera-toggle">啟動 Live</button>
+                      <small id="camera-message">等待 AGX 即時影像串流</small>
                     </div>
                   </div>
                 </section>
@@ -39,7 +40,6 @@
                   <p class="status-label">目前判定</p>
                   <h2 id="result-title">等待投入</h2>
                   <p id="result-copy">全程零按鈕，靠近即偵測，投入後自動判定。</p>
-                  <div class="speech-bubble" id="roast-line">靠近我，讓我看看你丟了什麼。</div>
                   <div class="confidence-meter" aria-label="AI 信心值">
                     <span>Confidence</span>
                     <div class="meter-track">

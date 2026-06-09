@@ -9,7 +9,7 @@
 - 海洋回饋視覺：依狀態切換生成海龜圖，`assets/sea-turtle-accept.png` 用於 accept，`assets/sea-turtle-reject.png` 用於 reject / multi / low，`assets/sea-turtle-display.png` 用於待機。
 - Admin 控制面板：獨立於 `/admin`，顯示系統健康狀態、demo 模擬、CSV 匯出。
 - 消費 vision 的 `recognition_result`，並更新狀態機與本機事件紀錄。
-- reject 時由本機 Python bridge 在主機端隨機播放 `assets/audio/reject/*.wav`；聲音走主機預設音訊輸出，例如 HDMI 螢幕喇叭。accept / low / multi / detect 不播放音檔。
+- reject 時由本機 Python bridge 在主機端隨機播放 `assets/audio/reject/*.wav`；可指定 AGX 連接的 ALSA/PulseAudio 喇叭裝置。accept / low / multi / detect 不播放音檔。
 
 Display 不負責模型推論、L515 depth 距離觸發、使用者確認按鈕或公開的 firmware 指令回傳流程。
 
@@ -39,6 +39,21 @@ firmware -- q_detected / user_detected --> vision -- q_result / recognition_resu
 ```bash
 python3 server.py --host 0.0.0.0 --port 8080
 ```
+
+Display 預設使用 AGX 目前的 HDMI 螢幕音訊 sink：`alsa_output.platform-3510000.hda.hdmi-stereo`。若需要改成其他 AGX 喇叭裝置，可覆蓋設定：
+
+```bash
+python3 server.py --host 0.0.0.0 --port 8080 --audio-device plughw:0,3
+```
+
+也可以用環境變數，錄音腳本的播放確認會共用同一個設定。若未設定，錄音腳本也預設走 HDMI 螢幕 sink：
+
+```bash
+DISPLAY_AUDIO_DEVICE=alsa_output.platform-3510000.hda.hdmi-stereo python3 server.py --host 0.0.0.0 --port 8080
+DISPLAY_AUDIO_DEVICE=alsa_output.platform-3510000.hda.hdmi-stereo display/scripts/record_accept_positive_lines.sh
+```
+
+在 AGX 上可先用 `pactl info`、`pactl list short sinks`、`aplay -l` 或 `aplay -L` 查看實際裝置名稱；目前這台 AGX 的預設輸出是 HDMI 螢幕 sink。
 
 本機開：
 
@@ -79,7 +94,7 @@ run_display_server(q_result, host="0.0.0.0", port=8080)
 - `class == "reject"` 且信心足夠：顯示 reject，增加 reject 統計。
 - result 狀態會進入 cooldown，再回到 idle。
 - UI 邊框光效：accept 為綠光、reject / multi 為紅光、low confidence 為黃光。
-- Host audio：只有真正的 `reject` outcome 會播放隨機 reject WAV；`multi` 雖然計入 reject 統計，但不播放音檔。
+- Host audio：只有真正的 `reject` outcome 會播放隨機 reject WAV；`multi` 雖然計入 reject 統計，但不播放音檔。若設定 `--audio-device` 或 `DISPLAY_AUDIO_DEVICE`，播放會走指定的 AGX 喇叭裝置。
 - 原本的角色式視覺已移除；公開 Display 以相機畫面與判定光效為第一視覺。
 
 ## Demo Mock
